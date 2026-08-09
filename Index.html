@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Esmaga Políticos - SiX Sevennnn</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0d1117;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: system-ui, sans-serif;
+      color: #e6edf3;
+      user-select: none;
+    }
+    h1 { margin-bottom: 8px; font-size: 1.5rem; color: #3fb950; }
+    #info {
+      margin-bottom: 8px;
+      font-size: 1.05rem;
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    canvas {
+      background: #161b22;
+      border: 3px solid #238636;
+      border-radius: 8px;
+      cursor: crosshair;
+      box-shadow: 0 0 30px rgba(35, 134, 54, 0.3);
+    }
+    #instrucoes {
+      margin-top: 12px;
+      font-size: 0.9rem;
+      color: #8b949e;
+      text-align: center;
+      max-width: 540px;
+      line-height: 1.4;
+    }
+  </style>
+</head>
+<body>
+  <h1>Esmaga Políticos</h1>
+  <div id="info">
+    <span>Pontos: <strong id="pontos">0</strong></span>
+    <span>Fase: <strong id="fase">1</strong></span>
+    <span>Personagens: <strong id="qtd">0</strong></span>
+  </div>
+  <canvas id="game" width="540" height="540"></canvas>
+  <div id="instrucoes">
+    Clique para colocar Lula ou Bolsonaro<br>
+    Chegue a <strong>67</strong> → explosão + dança + próxima fase com mais obstáculos
+  </div>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+
+    // ===== Estado do jogo =====
+    let pontos = 0;
+    let fase = 1;
+    let pausado = false;
+    let tempoPausa = 0;
+    const DURACAO_PAUSA = 280; // \~4.5 segundos
+
+    // ===== Quadrado =====
+    const quadrado = {
+      x: 240, y: 240, size: 38,
+      velX: 3.3, velY: 2.8,
+      cor: '#3fb950'
+    };
+
+    // ===== Personagens e obstáculos =====
+    const personagens = [];
+    const obstaculos = [];
+    const particulas = [];
+    const fogos = [];
+
+    // ===== Celebração =====
+    let celebracao = {
+      ativo: false,
+      vida: 0,
+      maxVida: DURACAO_PAUSA,
+      escala: 0.2,
+      dançaOffset: 0
+    };
+
+    // ===== Áudio simples (Web Audio) =====
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    function tocarBeep(freq, dur, tipo = 'square', vol = 0.08) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = tipo;
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + dur);
+    }
+
+    function tocarExplosao() {
+      // Som de fogos / celebração
+      for (let i = 0; i < 8; i++) {
+        setTimeout(() => {
+          tocarBeep(200 + Math.random() * 600, 0.15, 'sawtooth', 0.06);
+        }, i * 80);
+      }
+      // "SiX Seven" vibe
+      setTimeout(() => tocarBeep(440, 0.2, 'square', 0.1), 200);
+      setTimeout(() => tocarBeep(523, 0.25, 'square', 0.1), 450);
+      setTimeout(() => tocarBeep(659, 0.3, 'square', 0.12), 700);
+    }
+
+    // Clique
+    canvas.addEventListener('click', (e) => {
+      if (pausado) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      personagens.push({
+        x, y,
+        size: 42,
+        tipo: Math.random() < 0.5 ? 'lula' : 'bolsonaro',
+        vivo: true,
+        scale: 0.2
+      });
+    });
+
+    function colide(a, b) {
+      return a.x < b.x + b.size && a.x + a.size > b.x &&
+             a.y < b.y + b.size && a.y + a.size > b.y;
+    }
+
+    function criarParticulas(x, y, cor) {
+      for (let i = 0; i < 10; i++) {
+        particulas.push({
+          x, y,
+          velX: (Math.random() - 0.5) * 8,
+          velY: (Math.random() - 0.5) * 8,
+          vida: 30 + Math.random() * 20,
+          cor, size: 3 + Math.random() * 4
+        });
+      }
+    }
+
+    function criarFogos() {
+      const cores = ['#ff0044', '#00ff88', '#0088ff', '#ffff00', '#ff00ff', '#00ffff', '#ffffff', '#ff8800'];
+      for (let b = 0; b < 10; b++) {
+        const cx = 60 + Math.random() * 420;
+        const cy = 60 + Math.random() * 300;
+        for (let i = 0; i < 40; i++) {
+          const ang = (Math.PI * 2 * i) / 40 + Math.random() * 0.4;
+          const vel = 2.5 + Math.random() * 5.5;
+          fogos.push({
+            x: cx, y: cy,
+            velX: Math.cos(ang) * vel,
+            velY: Math.sin(ang) * vel,
+            vida: 50 + Math.random() * 40,
+            cor: cores[Math.floor(Math.random() * cores.length)],
+            size: 2.5 + Math.random() * 3.5,
+            grav: 0.05
+          });
+        }
+      }
+    }
+
+    // Adiciona obstáculos conforme a fase
+    function gerarObstaculos() {
+      obstaculos.length = 0;
+      const qtd = Math.min(2 + fase, 8);
+      for (let i = 0; i < qtd; i++) {
+        obstaculos.push({
+          x: 40 + Math.random() * 420,
+          y: 40 + Math.random() * 420,
+          w: 50 + Math.random() * 70,
+          h: 18 + Math.random() * 25,
+          cor: `hsl(${30 + Math.random() * 40}, 70%, 45%)`
+        });
+      }
+    }
+
+    function iniciarCelebracao() {
+      pausado = true;
+      celebracao.ativo = true;
+      celebracao.vida = celebracao.maxVida;
+      celebracao.escala = 0.15;
+      celebracao.dançaOffset = 0;
+      criarFogos();
+      tocarExplosao();
+    }
+
+    function finalizarCelebracao() {
+      pausado = false;
+      celebracao.ativo = false;
+      fase++;
+      pontos = 0;
+      gerarObstaculos();
+      // Limpa personagens restantes
+      personagens.length = 0;
+    }
+
+    // ===== Desenhos =====
+    function desenharOculosMeme(x, y, size) {
+      // Óculos Thug Life / Deal with it (pixel)
+      const gw = size * 0.55;
+      const gh = size * 0.18;
+      ctx.fillStyle = '#111';
+      ctx.fillRect(x - gw/2, y - size*0.12, gw, gh);
+      // Brilho branco pixel
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(x - gw/2 + 3, y - size*0.12 + 2, 6, 4);
+      ctx.fillRect(x + 4, y - size*0.12 + 2, 6, 4);
+      // Ponte
+      ctx.fillRect(x - 4, y - size*0.08, 8, 3);
+    }
+
+    function desenharLula(x, y, size, scale, dançando = false) {
+      ctx.save();
+      ctx.translate(x, y + (dançando ? Math.sin(celebracao.dançaOffset) * 12 : 0));
+      ctx.scale(scale, scale);
+
+      // Cabeça
+      ctx.beginPath();
+      ctx.arc(0, 0, size/2, 0, Math.PI * 2);
+      ctx.fillStyle = '#f5c6a5';
+      ctx.fill();
+
+      // Cabelo
+      ctx.beginPath();
+      ctx.arc(0, -size*0.15, size*0.48, Math.PI, 0);
+      ctx.fillStyle = '#e8e8e8';
+      ctx.fill();
+
+      // Barba
+      ctx.beginPath();
+      ctx.ellipse(0, size*0.22, size*0.32, size*0.28, 0, 0, Math.PI * 2);
+      ctx.fillStyle = '#d0d0d0';
+      ctx.fill();
+
+      // Olhos
+      ctx.fillStyle = '#222';
+      ctx.beginPath();
+      ctx.arc(-size*0.16, -size*0.05, size*0.07, 0, Math.PI * 2);
+      ctx.arc( size*0.16, -size*0.05, size*0.07, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Óculos de meme
+      if (dançando) desenharOculosMeme(0, 0, size);
+
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 11px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText('LULA', 0, size/2 + 16);
+
+      ctx.restore();
+    }
+
+    function desenharBolsonaro(x, y, size, scale, dançando = false) {
+      ctx.save();
+      ctx.translate(x, y + (dançando ? Math.sin(celebracao.dançaOffset + 1.2) * 12 : 0));
+      ctx.scale(scale, scale);
+
+      ctx.beginPath();
+      ctx.arc(0, 0, size/2, 0, Math.PI * 2);
+      ctx.fillStyle = '#f0c4a0';
+      ctx.fill();
+
+      // Cabelo
+      ctx.beginPath();
+      ctx.arc(0, -size*0.18, size*0.46, Math.PI, 0);
+      ctx.fillStyle = '#3a2a1a';
+      ctx.fill();
+
+      // Bigode
+      ctx.beginPath();
+      ctx.ellipse(0, size*0.12, size*0.28, size*0.1, 0, 0, Math.PI * 2);
+      ctx.fillStyle = '#3a2a1a';
+      ctx.fill();
+
+      // Olhos
+      ctx.fillStyle = '#222';
+      ctx.beginPath();
+      ctx.arc(-size*0.16, -size*0.05, size*0.07, 0, Math.PI * 2);
+      ctx.arc( size*0.16, -size*0.05, size*0.07, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (dançando) desenharOculosMeme(0, 0, size);
+
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 10px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText('BOLSONARO', 0, size/2 + 16);
+
+      ctx.restore();
+    }
+
+    // ===== Loop =====
+    function update() {
+      ctx.fillStyle = '#161b22';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Obstáculos
+      obstaculos.forEach(o => {
+        ctx.fillStyle = o.cor;
+        ctx.fillRect(o.x, o.y, o.w, o.h);
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(o.x, o.y, o.w, o.h);
+      });
+
+      // Personagens
+      for (let i = personagens.length - 1; i >= 0; i--) {
+        const p = personagens[i];
+        if (!p.vivo) continue;
+        if (p.scale < 1) p.scale += 0.07;
+
+        if (p.tipo === 'lula') desenharLula(p.x, p.y, p.size, p.scale);
+        else desenharBolsonaro(p.x, p.y, p.size, p.scale);
+
+        if (!pausado && colide(quadrado, {
+          x: p.x - p.size/2, y: p.y - p.size/2, size: p.size
+        })) {
+          p.vivo = false;
+          pontos++;
+          criarParticulas(p.x, p.y, p.tipo === 'lula' ? '#58a6ff' : '#f85149');
+
+          if (pontos >= 67) {
+            iniciarCelebracao();
+          }
+        }
+      }
+      for (let i = personagens.length - 1; i >= 0; i--) {
+        if (!personagens[i].vivo) personagens.splice(i, 1);
+      }
+
+      // Partículas normais
+      for (let i = particulas.length - 1; i >= 0; i--) {
+        const pt = particulas[i];
+        pt.x += pt.velX; pt.y += pt.velY; pt.velY += 0.16; pt.vida--;
+        ctx.globalAlpha = Math.max(0, pt.vida / 40);
+        ctx.fillStyle = pt.cor;
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, pt.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        if (pt.vida <= 0) particulas.splice(i, 1);
+      }
+
+      // Fogos
+      for (let i = fogos.length - 1; i >= 0; i--) {
+        const f = fogos[i];
+        f.x += f.velX; f.y += f.velY; f.velY += f.grav; f.velX *= 0.985; f.vida--;
+        ctx.globalAlpha = Math.max(0, f.vida / 70);
+        ctx.fillStyle = f.cor;
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, f.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, f.size * 0.35, 0, Math.PI * 2);
+        ctx.fillStyle = '#fff';
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        if (f.vida <= 0) fogos.splice(i, 1);
+      }
+
+      // ===== Celebração (pausa + texto + dança) =====
+      if (celebracao.ativo) {
+        celebracao.vida--;
+        celebracao.dançaOffset += 0.18;
+
+        if (celebracao.vida > celebracao.maxVida - 40) {
+          celebracao.escala += 0.06;
+        } else if (celebracao.vida < 50) {
+          celebracao.escala *= 0.97;
+        }
+
+        const alpha = Math.min(1, celebracao.vida / 50);
+
+        // Fundo semi-transparente
+        ctx.fillStyle = `rgba(0,0,0,${0.45 * alpha})`;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Texto central ENORME
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.translate(canvas.width / 2, canvas.height / 2 - 20);
+        ctx.scale(celebracao.escala, celebracao.escala);
+
+        ctx.shadowColor = '#ff00aa';
+        ctx.shadowBlur = 30;
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 58px system-ui';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('SiX Sevennnn', 0, 0);
+
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = '#ff00cc';
+        ctx.lineWidth = 4;
+        ctx.strokeText('SiX Sevennnn', 0, 0);
+        ctx.restore();
+
+        // Bonequinhos dançando dos lados com óculos
+        const escalaDanca = 1.15;
+        desenharLula(110, canvas.height / 2 + 30, 48, escalaDanca, true);
+        desenharBolsonaro(canvas.width - 110, canvas.height / 2 + 30, 48, escalaDanca, true);
+
+        if (celebracao.vida <= 0) {
+          finalizarCelebracao();
+        }
+      }
+
+      // Move o quadrado (só se não estiver pausado)
+      if (!pausado) {
+        quadrado.x += quadrado.velX;
+        quadrado.y += quadrado.velY;
+
+        // Bordas
+        if (quadrado.x <= 0 || quadrado.x + quadrado.size >= canvas.width) {
+          quadrado.velX *= -1;
+          quadrado.x = Math.max(0, Math.min(quadrado.x, canvas.width - quadrado.size));
+        }
+        if (quadrado.y <= 0 || quadrado.y + quadrado.size >= canvas.height) {
+          quadrado.velY *= -1;
+          quadrado.y = Math.max(0, Math.min(quadrado.y, canvas.height - quadrado.size));
+        }
+
+        // Colisão com obstáculos
+        obstaculos.forEach(o => {
+          if (quadrado.x < o.x + o.w && quadrado.x + quadrado.size > o.x &&
+              quadrado.y < o.y + o.h && quadrado.y + quadrado.size > o.y) {
+            // Rebote simples
+            const cx = quadrado.x + quadrado.size / 2;
+            const cy = quadrado.y + quadrado.size / 2;
+            const ox = o.x + o.w / 2;
+            const oy = o.y + o.h / 2;
+            if (Math.abs(cx - ox) > Math.abs(cy - oy)) {
+              quadrado.velX *= -1;
+            } else {
+              quadrado.velY *= -1;
+            }
+            // Empurra pra fora
+            if (cx < ox) quadrado.x = o.x - quadrado.size - 1;
+            else if (cx > ox) quadrado.x = o.x + o.w + 1;
+            if (cy < oy) quadrado.y = o.y - quadrado.size - 1;
+            else if (cy > oy) quadrado.y = o.y + o.h + 1;
+          }
+        });
+      }
+
+      // Desenha quadrado
+      ctx.shadowColor = 'rgba(63, 185, 80, 0.55)';
+      ctx.shadowBlur = 12;
+      ctx.fillStyle = quadrado.cor;
+      ctx.fillRect(quadrado.x, quadrado.y, quadrado.size, quadrado.size);
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = '#1a7f37';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(quadrado.x + 2, quadrado.y + 2, quadrado.size - 4, quadrado.size - 4);
+
+      // HUD
+      document.getElementById('pontos').textContent = pontos;
+      document.getElementById('fase').textContent = fase;
+      document.getElementById('qtd').textContent = personagens.length;
+
+      requestAnimationFrame(update);
+    }
+
+    // Inicia com obstáculos da fase 1
+    gerarObstaculos();
+    update();
+  </script>
+</body>
+</html>
